@@ -1,18 +1,24 @@
-#define DROPDOWN_STEP_SENSOR_INPUT_PIN      3
-#define LEFT_SUPPORT_LEG_SENSOR_INPUT_PIN   4
-#define RIGHT_SUPPORT_LEG_SENSOR_INPUT_PIN  5
-#define GAS_DOOR_SENSOR_INPUT_PIN           6
-#define GAS_VALVE_SENSOR_INPUT_PIN          7
-#define OUTPUT_PIN                          13
+#define DROPDOWN_STEP      3
+#define LEFT_SUPPORT_LEG   4
+#define RIGHT_SUPPORT_LEG  5
+#define GAS_DOOR           6
+#define GAS_VALVE          7
+#define INIT_HZ            5
+#define DEBUG
 
 class Runnable {
   static Runnable *headRunnable;
   Runnable *nextRunnable;
 public:
   static int delayTime;
+  bool enabled;
+#ifdef DEBUG
+  String outputString;
+#endif
   Runnable() {
     nextRunnable = headRunnable;
     headRunnable = this;
+    enabled = true;
   }
 
   virtual void setupRunnable() = 0;
@@ -25,9 +31,18 @@ public:
 
   static void loopAll() {
     for (Runnable *r = headRunnable; r; r = r->nextRunnable) {
-      r->loopRunnable();
-      delay(Runnable::delayTime);
+      if (r->enabled) {
+        r->loopRunnable();
+        delay(Runnable::delayTime);
+      }
     }
+#ifdef DEBUG
+    String outputstring = "";
+    for (Runnable *r = headRunnable; r; r = r->nextRunnable) {
+      outputstring += r->outputString;
+    }
+    Serial.println(outputstring);
+#endif
   }
 };
 
@@ -45,9 +60,8 @@ class CircuitSwitchSensor : public Runnable {
   String id;
 public:
   CircuitSwitchState state = kUnknown;
-  CircuitSwitchSensor(String id, byte outputPin, byte inputPin) {
+  CircuitSwitchSensor(String id, byte inputPin) {
     this->id = id;
-    this->outputPin = outputPin;
     this->inputPin = inputPin;
   }
   void setupRunnable() {
@@ -60,29 +74,29 @@ public:
       state = kOpen;
     }
 
+#ifdef DEBUG
     switch(state) {
-      case kUnknown: Serial.print(id + ": Unknown # "); break;
-      case kClosed:  Serial.print(id + ": Closed  # "); break;
-      case kOpen:    Serial.print(id + ": Open    # "); break;
+      case kUnknown: outputString = id + ": Unknown # "; break;
+      case kClosed:  outputString = id + ": Closed  # "; break;
+      case kOpen:    outputString = id + ": Open    # "; break;
     }
-      
+#endif      
   }
 };
 
-CircuitSwitchSensor DropdownStepSensor   ("STP_DWN", OUTPUT_PIN, DROPDOWN_STEP_SENSOR_INPUT_PIN);
-CircuitSwitchSensor LeftSupportLegSensor ("LFT_LEG", OUTPUT_PIN, LEFT_SUPPORT_LEG_SENSOR_INPUT_PIN);
-CircuitSwitchSensor RightSupportLegSensor("RGT_LEG", OUTPUT_PIN, RIGHT_SUPPORT_LEG_SENSOR_INPUT_PIN);
-CircuitSwitchSensor GasDoorSensor        ("GAS_DOR", OUTPUT_PIN, GAS_DOOR_SENSOR_INPUT_PIN);
-CircuitSwitchSensor GasValveSensor       ("GAS_VLV", OUTPUT_PIN, GAS_VALVE_SENSOR_INPUT_PIN);
+CircuitSwitchSensor DropdownStepSensor   ("STP_DWN", DROPDOWN_STEP);
+CircuitSwitchSensor LeftSupportLegSensor ("LFT_LEG", LEFT_SUPPORT_LEG);
+CircuitSwitchSensor RightSupportLegSensor("RGT_LEG", RIGHT_SUPPORT_LEG);
+CircuitSwitchSensor GasDoorSensor        ("GAS_DOR", GAS_DOOR);
+CircuitSwitchSensor GasValveSensor       ("GAS_VLV", GAS_VALVE);
 
-int Runnable::delayTime = 500;
+int Runnable::delayTime = 1000 / INIT_HZ;
 
 void setup() {
   Runnable::setupAll();
-  Serial.begin(9600);
+  Serial.begin(38400);
 }
 
 void loop() {
   Runnable::loopAll();
-  Serial.println();
 }
