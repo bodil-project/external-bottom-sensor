@@ -1,102 +1,183 @@
-#define DROPDOWN_STEP      3
-#define LEFT_SUPPORT_LEG   4
-#define RIGHT_SUPPORT_LEG  5
-#define GAS_DOOR           6
-#define GAS_VALVE          7
-#define INIT_HZ            5
-#define DEBUG
+// See Z90Run for the program
+class VirtualThread {
+  static VirtualThread *headVirtualThread;
+  VirtualThread *nextVirtualThread;
 
-class Runnable {
-  static Runnable *headRunnable;
-  Runnable *nextRunnable;
+  bool isLoopEnabled;
 public:
-  static int delayTime;
-  bool enabled;
-#ifdef DEBUG
-  String outputString;
-#endif
-  Runnable() {
-    nextRunnable = headRunnable;
-    headRunnable = this;
-    enabled = true;
+  VirtualThread(bool loopEnabled = true) {
+    nextVirtualThread = headVirtualThread;
+    headVirtualThread = this;
+    isLoopEnabled = loopEnabled;
+    Serial.print("VirtualThread(");
+    Serial.print(isLoopEnabled);
+    Serial.println(")");
   }
 
-  virtual void setupRunnable() = 0;
-  virtual void loopRunnable() = 0;
+  virtual void initVirtualThread() = 0;
+  virtual void runVirtualThread() = 0;
+  virtual void printConfig() = 0;
+  virtual void disableLoop() {
+    isLoopEnabled = false;
+  }
 
-  static void setupAll() {
-    for (Runnable *r = headRunnable; r; r = r->nextRunnable)
-      r->setupRunnable();
+  static void initAll() {
+    Serial.print("initAll()");
+    headVirtualThread->printConfig();
+    for (VirtualThread *r = headVirtualThread; r; r = r->nextVirtualThread) {
+      r->printConfig();
+      r->initVirtualThread();
+    }
+    Serial.println();
   }
 
   static void loopAll() {
-    for (Runnable *r = headRunnable; r; r = r->nextRunnable) {
-      if (r->enabled) {
-        r->loopRunnable();
-        delay(Runnable::delayTime);
+    Serial.print("loopAll()");
+    for (VirtualThread *r = headVirtualThread; r; r = r->nextVirtualThread) {
+      Serial.print("*");
+      if (r->isLoopEnabled) {
+        r->runVirtualThread();
+        delay(1000 / VirtualThread::Hz);
       }
     }
-#ifdef DEBUG
-    String outputstring = "";
-    for (Runnable *r = headRunnable; r; r = r->nextRunnable) {
-      outputstring += r->outputString;
-    }
-    Serial.println(outputstring);
-#endif
+    Serial.println();
   }
+
+  static int Hz;
 };
 
-Runnable *Runnable::headRunnable = NULL;
+VirtualThread *VirtualThread::headVirtualThread = NULL;
 
-enum CircuitSwitchState {
-  kUnknown = -1,
-  kClosed = 0,
-  kOpen = 1
-};
-
-class CircuitSwitchSensor : public Runnable {
-  byte inputPin;
-  byte outputPin;
+struct CircuitSwitchSensorConfig {
   String id;
-public:
-  CircuitSwitchState state = kUnknown;
-  CircuitSwitchSensor(String id, byte inputPin) {
-    this->id = id;
-    this->inputPin = inputPin;
-  }
-  void setupRunnable() {
-    pinMode(this->inputPin, INPUT_PULLUP);
-  }
-  void loopRunnable() {
-    if (digitalRead(inputPin) == LOW) {
-      state = kClosed;
-    } else {
-      state = kOpen;
-    }
+  int   sensorId;
+  int   inputPin;
+  bool   isLoopEnabled;
+};
 
-#ifdef DEBUG
-    switch(state) {
-      case kUnknown: outputString = id + ": Unknown # "; break;
-      case kClosed:  outputString = id + ": Closed  # "; break;
-      case kOpen:    outputString = id + ": Open    # "; break;
+enum CircuitSwitchSensorState {
+  kUnknown = -1,
+  kClosed  =  0,
+  kOpen    =  1
+};
+
+
+class CircuitSwitchSensor : public VirtualThread {
+  CircuitSwitchSensorConfig sensorConfig;
+  CircuitSwitchSensorState state = kUnknown;
+  void (*pCircuitSwitchChange)(CircuitSwitchSensorConfig, CircuitSwitchSensorState) = NULL;
+  void setState(CircuitSwitchSensorState newState) {
+    if (state != newState) {
+      state = newState;
+      Serial.println();
+      Serial.println("INTERRUPT");
+      printConfig();
+      if (pCircuitSwitchChange)
+        pCircuitSwitchChange(sensorConfig, state);
     }
-#endif      
+  }
+public:
+  CircuitSwitchSensor(String id, int sensorId, int inputPin, bool loopEnabled = true, void p(CircuitSwitchSensorConfig, CircuitSwitchSensorState) = NULL) : VirtualThread(loopEnabled) { 
+    sensorConfig.id = id;
+    sensorConfig.sensorId = sensorId;
+    sensorConfig.inputPin = inputPin;
+    sensorConfig.isLoopEnabled = loopEnabled;
+    pCircuitSwitchChange = p;
+  }
+  
+  CircuitSwitchSensor(CircuitSwitchSensorConfig init, int index, void p(CircuitSwitchSensorConfig, CircuitSwitchSensorState) = NULL) : CircuitSwitchSensor(init.id, init.sensorId, init.inputPin, init.isLoopEnabled, p) {
+    Serial.println("CircuitSwitchSensor()");    
+    if (sensorConfig.sensorId != (index + 1) || (sensorConfig.inputPin != (index + 3))) {
+      sensorConfig.id = init.id + "[" + init.sensorId + "][" + init.inputPin + "][" + init.isLoopEnabled + "]";
+      sensorConfig.sensorId = index + 1;
+      sensorConfig.inputPin = index + 3;
+    }
+    printConfig();
+  }
+  
+  void initVirtualThread() {
+    if (sensorConfig.sensorId > 0)
+      pinMode(sensorConfig.inputPin, INPUT_PULLUP);
+  }
+  
+  void runVirtualThread() {
+    printConfig();
+    if (digitalRead(sensorConfig.inputPin) == LOW)
+      setState(kClosed);
+    else
+      setState(kOpen);
+    switch(getState()) {
+      case kOpen: Serial.print("1"); break;
+      case kClosed: Serial.print("0"); break;
+      case kUnknown: Serial.print("?"); break;
+    }
+  }
+
+  void printConfig() {
+    Serial.print(sensorConfig.id);
+    Serial.print(", ");
+    Serial.print(sensorConfig.sensorId);
+    Serial.print(", ");
+    Serial.print(sensorConfig.inputPin);
+    Serial.print(", ");
+    Serial.println(sensorConfig.isLoopEnabled);
+  }
+
+  void setStateChangeEvent(void p(CircuitSwitchSensorConfig, CircuitSwitchSensorState)) {
+    pCircuitSwitchChange = p;    
+  }
+  
+  CircuitSwitchSensorState getState() {
+    return state;
   }
 };
 
-CircuitSwitchSensor DropdownStepSensor   ("STP_DWN", DROPDOWN_STEP);
-CircuitSwitchSensor LeftSupportLegSensor ("LFT_LEG", LEFT_SUPPORT_LEG);
-CircuitSwitchSensor RightSupportLegSensor("RGT_LEG", RIGHT_SUPPORT_LEG);
-CircuitSwitchSensor GasDoorSensor        ("GAS_DOR", GAS_DOOR);
-CircuitSwitchSensor GasValveSensor       ("GAS_VLV", GAS_VALVE);
+CircuitSwitchSensorConfig CircuitSwitchSensors[6] {
+  {"DRP_DWN", 1, 3, true}, // Dropdown step extended sensor
+  {"LFT_LEG", 2, 4, true}, // Left support down leg sensor
+  {"RGT_LEG", 3, 5, true}, // Right support down leg sensor
+  {"GAS_DOR", 4, 6, true}, // Gas door open sensor
+  {"GAS_VLV", 5, 7, true}, // Gas valve open sensor
+  {"NOT_USD", 6, 8, false} // Not used
+};
 
-int Runnable::delayTime = 1000 / INIT_HZ;
+
+
+int VirtualThread::Hz = 5;
+
+class StateChanger {
+  public:
+  static void StateChange(CircuitSwitchSensorConfig sensorConfig, CircuitSwitchSensorState state) {
+    Serial.print(sensorConfig.id + " = ");
+    switch(state) {
+      case kOpen: Serial.print("Open"); break;
+      case kClosed: Serial.print("Closed"); break;
+      case kUnknown: Serial.print("Unknown"); break;
+    }
+    Serial.print(" [");
+    Serial.print(sensorConfig.sensorId + ", ");
+    Serial.print(sensorConfig.inputPin + ", ");
+    Serial.println(sensorConfig.isLoopEnabled + "]");
+    
+  }
+};
+
 
 void setup() {
-  Runnable::setupAll();
-  Serial.begin(38400);
+  //StateChanger stateChanger = StateChanger();
+  Serial.begin(9600);
+  Serial.println("bodil-external-bottom-sensor!");
+  //for (int i = 0; i < 5; i++) {
+  CircuitSwitchSensor s0 = CircuitSwitchSensor(CircuitSwitchSensors[0], 0, StateChanger::StateChange);
+  CircuitSwitchSensor s1 = CircuitSwitchSensor(CircuitSwitchSensors[1], 1, StateChanger::StateChange);
+  CircuitSwitchSensor s2 = CircuitSwitchSensor(CircuitSwitchSensors[2], 2, StateChanger::StateChange);
+  CircuitSwitchSensor s3 = CircuitSwitchSensor(CircuitSwitchSensors[3], 3, StateChanger::StateChange);
+  CircuitSwitchSensor s4 = CircuitSwitchSensor(CircuitSwitchSensors[4], 4, StateChanger::StateChange);
+  //}
+  VirtualThread::initAll();
 }
 
 void loop() {
-  Runnable::loopAll();
+  
+  //VirtualThread::loopAll();
 }
